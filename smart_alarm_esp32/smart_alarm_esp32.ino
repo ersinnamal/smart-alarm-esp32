@@ -9,10 +9,14 @@
 
 #define DEVICE_NAME      "ESP32"
 
+BLECharacteristic* ldrChar;
+BLECharacteristic* thresChar;
+BLECharacteristic* activeChar;
+
 typedef const uint8_t pin; 
 
 pin redLedPin = 33;
-pin greenLedPin = 12;
+pin greenLedPin = 14;
 pin trigPin = 13; 
 pin echoPin = 12; 
 pin buzzerPin = 26;
@@ -24,6 +28,7 @@ const uint8_t toneLength = 4;
 uint toneArr[toneLength] = {100, 100, 100, 100};
 
 bool isActive = false; 
+uint16_t threshold = 0;
 uint distance; 
 unsigned long endTime = 0; 
 
@@ -43,8 +48,8 @@ class MyServerCallbacks: public BLEServerCallbacks {
 class ThresholdCharactericticCallbacks: public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param) {
     String value = pCharacteristic->getValue().c_str(); 
-    endTime = millis() + value.toInt();
-    isActive = true; 
+    Serial.println(value);
+    threshold = value.toInt();
   }
   void onRead(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param) {
     // uint16_t ldrValue = analogRead(ldrPin);
@@ -56,9 +61,7 @@ class ThresholdCharactericticCallbacks: public BLECharacteristicCallbacks {
 class LdrCharacteristicCallbacks: public BLECharacteristicCallbacks {
   void onRead(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param) {
     uint16_t ldrValue = analogRead(ldrPin);
-    Serial.println(ldrValue);
-    Serial.println(String(ldrValue));
-    Serial.println(String(ldrValue));
+
 
     pCharacteristic->setValue(String(ldrValue).c_str());
   }
@@ -66,6 +69,8 @@ class LdrCharacteristicCallbacks: public BLECharacteristicCallbacks {
 
 class ActiveCharacteristicCallbacks: public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param) {
+    Serial.println("adasda"); 
+    Serial.println(String(pCharacteristic->getValue().c_str()));
     isActive = String(pCharacteristic->getValue().c_str()) == "1";
   }
   void onRead(BLECharacteristic *pCharacteristic, esp_ble_gatts_cb_param_t *param) {
@@ -90,14 +95,14 @@ void beepTask(void *pvParameters) {
 
 
 template<class Callbacks>
-void createCharacteristic(char* CHAR_UUID, BLEService* pService, char* initialValue) {
+BLECharacteristic* createCharacteristic(char* CHAR_UUID, BLEService* pService, char* initialValue) {
   BLECharacteristic *characteristic = pService->createCharacteristic(CHAR_UUID, 
                                                                      BLECharacteristic::PROPERTY_READ | 
                                                                      BLECharacteristic::PROPERTY_WRITE);
   characteristic->setCallbacks(new Callbacks());
   characteristic->setValue(initialValue);
+  return characteristic; 
 }
-
 
 void setup() {
   Serial.begin(115200);
@@ -116,9 +121,9 @@ void setup() {
   pServer->setCallbacks(new MyServerCallbacks());
   BLEService *pService = pServer->createService(SERVICE_UUID);
 
-  createCharacteristic<LdrCharacteristicCallbacks>(LDR_CHAR_UUID, pService, "0");
-  createCharacteristic<ThresholdCharactericticCallbacks>(THRES_CHAR_UUID, pService, "0");
-  createCharacteristic<ActiveCharacteristicCallbacks>(ACTIVE_CHAR_UUID, pService, "0");
+  ldrChar = createCharacteristic<LdrCharacteristicCallbacks>(LDR_CHAR_UUID, pService, "0");
+  thresChar = createCharacteristic<ThresholdCharactericticCallbacks>(THRES_CHAR_UUID, pService, "0");
+  activeChar = createCharacteristic<ActiveCharacteristicCallbacks>(ACTIVE_CHAR_UUID, pService, "0");
 
   pService->start();
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
@@ -129,12 +134,12 @@ void setup() {
 }
 
 void loop() {
-  if (isActive && millis() >= endTime) {
+  if (isActive && analogRead(ldrPin) >= threshold) {
     digitalWrite(greenLedPin, HIGH); 
 
     xTaskCreatePinnedToCore(beepTask, "Beep", 1000, NULL, 0, &Task1, 1);
     uint8_t counter = 0; 
-    while (counter < 5) {
+    while (isActive && counter < 5) {
       digitalWrite(trigPin, HIGH);  
       delayMicroseconds(10); 
       digitalWrite(trigPin, LOW); 
@@ -150,9 +155,10 @@ void loop() {
       }
     }
 
-    if (counter == 5) {
+    if (!isActive || counter == 5) {
       vTaskDelete(Task1); 
-      isActive = false; 
+      activeChar->setValue("0"); 
+      isActive = false;
       digitalWrite(greenLedPin, LOW);
     }
   }
